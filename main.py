@@ -10,7 +10,11 @@ from models import Transaction
 from services.transaction_service import TransactionService
 
 # Create app instance
-app = FastAPI(title="Expense Tracker API", description="This is a simple API for tracking expenses.", version="1.0.0")
+app = FastAPI(
+    title="Expense Tracker API",
+    description="A lightweight FastAPI service for creating, listing, retrieving, and deleting expense transactions.",
+    version="1.0.0",
+)
 
 
 @app.on_event("startup")
@@ -49,58 +53,70 @@ class TransactionRead(BaseModel):
     created_at: datetime
 
 
-# Create a root endpoint and health check endpoint
-@app.get("/")
+@app.get("/", tags=["health"])
 def read_root():
+    """Return a welcome message for the API root."""
     return {"message": "Welcome to the Expense Tracker API"}
 
 
-@app.get("/health")
+@app.get("/health", tags=["health"])
 def health_check():
+    """Report the API health status for readiness checks."""
     return {"status": "healthy"}
 
 
-# create a new transaction for expense tracking system
-@app.post("/transactions", response_model=TransactionRead, status_code=status.HTTP_201_CREATED)
-def create_transaction(payload: TransactionCreate, service: TransactionService = Depends(get_transaction_service)):
+@app.post(
+    "/transactions",
+    response_model=TransactionRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["transactions"],
+)
+def create_transaction(
+    payload: TransactionCreate,
+    service: TransactionService = Depends(get_transaction_service),
+):
+    """Create a new expense transaction.
+
+    The request body accepts a description, amount, optional category, and optional transaction date.
+    If a transaction appears to be a duplicate of an existing record, the API returns a 409 Conflict response.
+    """
     return service.create_transaction(payload.model_dump())
 
 
-# retrieve all transactions
-@app.get("/transactions", response_model=List[TransactionRead])
+@app.get("/transactions", response_model=List[TransactionRead], tags=["transactions"])
 def list_transactions(
     service: TransactionService = Depends(get_transaction_service),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1),
 ):
+    """List transactions with simple pagination support.
+
+    Results are ordered from newest to oldest so that paginated responses remain predictable for clients.
+    """
     return service.list_transactions(page=page, page_size=page_size)
 
 
-# retrieve a single transaction by its ID
-@app.get("/transactions/{transaction_id}", response_model=TransactionRead)
+@app.get("/transactions/{transaction_id}", response_model=TransactionRead, tags=["transactions"])
 def get_transaction(transaction_id: int, service: TransactionService = Depends(get_transaction_service)):
+    """Retrieve a single transaction by its identifier.
+
+    If the requested transaction does not exist, the endpoint returns a 404 Not Found response.
+    """
     return service.get_transaction(transaction_id)
 
 
-# delete a transaction from the database if it exists
-@app.delete("/transactions/{transaction_id}", status_code=status.HTTP_204_NO_CONTENT)
+@app.delete("/transactions/{transaction_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["transactions"])
 def delete_transaction(transaction_id: int, service: TransactionService = Depends(get_transaction_service)):
+    """Delete a transaction if it exists.
+
+    A successful deletion returns 204 No Content. Missing transactions return 404 Not Found.
+    """
     return service.delete_transaction(transaction_id)
 
 
 def deduplicate_transaction(transaction_data, db_session):
     service = TransactionService(db_session)
     return service.deduplicate_transaction(transaction_data, db_session)
-
-
-
-
-
-
-
-
-
-
 
 
 
