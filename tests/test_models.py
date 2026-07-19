@@ -98,3 +98,69 @@ def test_transaction_crud_endpoints_work():
     assert response.json() == []
 
     main.app.dependency_overrides.clear()
+
+
+def test_duplicate_inserts_are_rejected_when_transaction_date_is_missing():
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    TestingSessionLocal = sessionmaker(bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    def override_get_db():
+        db = TestingSessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    main.app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(main.app)
+
+    first_response = client.post(
+        "/transactions",
+        json={"description": "Coffee", "amount": 4.5, "category": "food"},
+    )
+    second_response = client.post(
+        "/transactions",
+        json={"description": "Coffee", "amount": 4.5, "category": "food"},
+    )
+
+    assert first_response.status_code == 201
+    assert second_response.status_code == 409
+
+    main.app.dependency_overrides.clear()
+
+
+def test_transactions_support_pagination():
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    TestingSessionLocal = sessionmaker(bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    def override_get_db():
+        db = TestingSessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    main.app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(main.app)
+
+    client.post("/transactions", json={"description": "A", "amount": 1, "category": "food"})
+    client.post("/transactions", json={"description": "B", "amount": 2, "category": "food"})
+    client.post("/transactions", json={"description": "C", "amount": 3, "category": "food"})
+
+    response = client.get("/transactions", params={"page": 2, "page_size": 1})
+    assert response.status_code == 200
+    items = response.json()
+    assert len(items) == 1
+    assert items[0]["description"] == "B"
+
+    main.app.dependency_overrides.clear()

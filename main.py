@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
@@ -49,7 +49,8 @@ def health_check():
 # create a new transaction for expense tracking system
 @app.post("/transactions", response_model=TransactionRead, status_code=status.HTTP_201_CREATED)
 def create_transaction(payload: TransactionCreate, db: Session = Depends(get_db)):
-    if deduplicate_transaction(payload.dict(), db):
+    payload_data = payload.model_dump()
+    if deduplicate_transaction(payload_data, db):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Duplicate transaction")
 
     transaction_date = payload.transaction_date or datetime.utcnow()
@@ -67,8 +68,19 @@ def create_transaction(payload: TransactionCreate, db: Session = Depends(get_db)
 
 # retrieve all transactions
 @app.get("/transactions", response_model=List[TransactionRead])
-def list_transactions(db: Session = Depends(get_db)):
-    return db.query(Transaction).order_by(Transaction.created_at.desc()).all()
+def list_transactions(
+    db: Session = Depends(get_db),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1),
+):
+    offset = (page - 1) * page_size
+    return (
+        db.query(Transaction)
+        .order_by(Transaction.created_at.desc(), Transaction.id.desc())
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
 
 
 # retrieve a single transaction by its ID
@@ -116,19 +128,18 @@ def deduplicate_transaction(transaction_data, db_session):
     category = transaction_data.get("category")
     transaction_date = transaction_data.get("transaction_date")
 
-    if description is None or amount is None or transaction_date is None:
+    if description is None or amount is None or category is None:
         return False
 
-    existing_transaction = (
-        db_session.query(Transaction)
-        .filter(
-            Transaction.description == description,
-            Transaction.amount == amount,
-            Transaction.category == category,
-            Transaction.transaction_date == transaction_date,
-        )
-        .first()
-    )
+    filters = [
+        Transaction.description == description,
+        Transaction.amount == amount,
+        Transaction.category == category,
+    ]
+    if transaction_date is not None:
+        filters.append(Transaction.transaction_date == transaction_date)
+
+    existing_transaction = db_session.query(Transaction).filter(*filters).first()
 
     return existing_transaction is not None
 
