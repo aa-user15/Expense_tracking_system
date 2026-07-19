@@ -1,5 +1,51 @@
 # Debugging Journal
 
+## Phase 3 — Refactoring and query-plan evidence
+
+### EXPLAIN QUERY PLAN
+
+Before refactor (naive transaction-only lookup):
+
+```sql
+EXPLAIN QUERY PLAN
+SELECT * FROM transactions;
+```
+
+```text
+[(2, 0, 216, 'SCAN transactions')]
+```
+
+After refactor (eager-loaded join with related category data):
+
+```sql
+EXPLAIN QUERY PLAN
+SELECT transactions.id,
+       transactions.description,
+       transactions.amount,
+       transactions.category,
+       transactions.category_id,
+       transactions.transaction_date,
+       transactions.created_at,
+       categories.id,
+       categories.name
+FROM transactions
+LEFT OUTER JOIN categories
+  ON categories.id = transactions.category_id
+ORDER BY transactions.created_at DESC, transactions.id DESC
+LIMIT 10;
+```
+
+```text
+[(5, 0, 216, 'SCAN transactions'),
+ (7, 0, 45, 'SEARCH categories USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN'),
+ (33, 0, 0, 'USE TEMP B-TREE FOR ORDER BY')]
+```
+
+Interpretation:
+- The refactor moves the access pattern from a simple transactions scan toward a joined eager-load path.
+- This allows the service layer to load related category data in the same query instead of relying on repeated follow-up lookups.
+- The result is a more efficient read pattern for transaction listings that include related metadata.
+
 ## Issue 1: Silent duplicate inserts
 
 - Prompt asked: "Why does posting the same transaction twice succeed instead of returning a conflict?"

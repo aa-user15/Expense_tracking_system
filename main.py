@@ -1,12 +1,13 @@
 from datetime import datetime
 from typing import List
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict
+from fastapi import Depends, FastAPI, Query, status
+from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy.orm import Session
 
 from db import get_db, init_db
 from models import Transaction
+from services.transaction_service import TransactionService
 
 # Create app instance
 app = FastAPI(title="Expense Tracker API", description="This is a simple API for tracking expenses.", version="1.0.0")
@@ -17,11 +18,24 @@ def startup_event():
     init_db()
 
 
+def get_transaction_service(db: Session = Depends(get_db)) -> TransactionService:
+    return TransactionService(db)
+
+
 class TransactionCreate(BaseModel):
     description: str
     amount: float
     category: str = "uncategorized"
     transaction_date: datetime | None = None
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("description must not be empty")
+        return value
 
 
 class TransactionRead(BaseModel):
@@ -48,100 +62,35 @@ def health_check():
 
 # create a new transaction for expense tracking system
 @app.post("/transactions", response_model=TransactionRead, status_code=status.HTTP_201_CREATED)
-def create_transaction(payload: TransactionCreate, db: Session = Depends(get_db)):
-    payload_data = payload.model_dump()
-    if deduplicate_transaction(payload_data, db):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Duplicate transaction")
-
-    transaction_date = payload.transaction_date or datetime.utcnow()
-    db_transaction = Transaction(
-        description=payload.description,
-        amount=payload.amount,
-        category=payload.category,
-        transaction_date=transaction_date,
-    )
-    db.add(db_transaction)
-    db.commit()
-    db.refresh(db_transaction)
-    return db_transaction
+def create_transaction(payload: TransactionCreate, service: TransactionService = Depends(get_transaction_service)):
+    return service.create_transaction(payload.model_dump())
 
 
 # retrieve all transactions
 @app.get("/transactions", response_model=List[TransactionRead])
 def list_transactions(
-    db: Session = Depends(get_db),
+    service: TransactionService = Depends(get_transaction_service),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1),
 ):
-    offset = (page - 1) * page_size
-    return (
-        db.query(Transaction)
-        .order_by(Transaction.created_at.desc(), Transaction.id.desc())
-        .offset(offset)
-        .limit(page_size)
-        .all()
-    )
+    return service.list_transactions(page=page, page_size=page_size)
 
 
 # retrieve a single transaction by its ID
 @app.get("/transactions/{transaction_id}", response_model=TransactionRead)
-def get_transaction(transaction_id: int, db: Session = Depends(get_db)):
-    transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
-    if transaction is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
-    return transaction
+def get_transaction(transaction_id: int, service: TransactionService = Depends(get_transaction_service)):
+    return service.get_transaction(transaction_id)
 
 
 # delete a transaction from the database if it exists
 @app.delete("/transactions/{transaction_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_transaction(transaction_id: int, db: Session = Depends(get_db)):
-    transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
-    if transaction is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
-
-    db.delete(transaction)
-    db.commit()
-    return None
+def delete_transaction(transaction_id: int, service: TransactionService = Depends(get_transaction_service)):
+    return service.delete_transaction(transaction_id)
 
 
 def deduplicate_transaction(transaction_data, db_session):
-    """
-    Check if a transaction already exists.
-
-    A duplicate transaction has the same description, amount,
-    category, and transaction_date as an existing transaction.
-
-    Return True if a duplicate exists.
-    Return False otherwise.
-    """
-    if db_session is None:
-        return False
-
-    if hasattr(transaction_data, "__dict__"):
-        transaction_data = transaction_data.__dict__
-
-    if not isinstance(transaction_data, dict):
-        return False
-
-    description = transaction_data.get("description")
-    amount = transaction_data.get("amount")
-    category = transaction_data.get("category")
-    transaction_date = transaction_data.get("transaction_date")
-
-    if description is None or amount is None or category is None:
-        return False
-
-    filters = [
-        Transaction.description == description,
-        Transaction.amount == amount,
-        Transaction.category == category,
-    ]
-    if transaction_date is not None:
-        filters.append(Transaction.transaction_date == transaction_date)
-
-    existing_transaction = db_session.query(Transaction).filter(*filters).first()
-
-    return existing_transaction is not None
+    service = TransactionService(db_session)
+    return service.deduplicate_transaction(transaction_data, db_session)
 
 
 

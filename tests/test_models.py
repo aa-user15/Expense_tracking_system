@@ -8,6 +8,7 @@ from sqlalchemy.pool import StaticPool
 from db import Base, get_db
 import main
 from models import Transaction
+from services.transaction_service import TransactionService
 
 
 def test_transaction_model_has_expected_table_and_columns():
@@ -162,5 +163,78 @@ def test_transactions_support_pagination():
     items = response.json()
     assert len(items) == 1
     assert items[0]["description"] == "B"
+
+    main.app.dependency_overrides.clear()
+
+
+def test_transaction_service_handles_crud_operations():
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    TestingSessionLocal = sessionmaker(bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    with TestingSessionLocal() as session:
+        service = TransactionService(session)
+        created = service.create_transaction(
+            {"description": "Taxi", "amount": 12.5, "category": "transport"},
+            session,
+        )
+
+        assert created.description == "Taxi"
+        assert service.get_transaction(created.id, session).description == "Taxi"
+        assert len(service.list_transactions(session, page=1, page_size=10)) == 1
+
+        service.delete_transaction(created.id, session)
+        assert service.list_transactions(session, page=1, page_size=10) == []
+
+
+def test_transaction_service_loads_related_category_eagerly():
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    TestingSessionLocal = sessionmaker(bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    with TestingSessionLocal() as session:
+        service = TransactionService(session)
+        created = service.create_transaction(
+            {"description": "Bus", "amount": 3.5, "category": "transport"},
+            session,
+        )
+
+        fetched = service.get_transaction(created.id, session)
+        assert fetched.category_detail is not None
+        assert fetched.category_detail.name == "transport"
+
+
+def test_dependency_injection_provides_transaction_service():
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    TestingSessionLocal = sessionmaker(bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    def override_get_db():
+        db = TestingSessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    main.app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(main.app)
+
+    response = client.get("/transactions")
+    assert response.status_code == 200
+
+    service = main.get_transaction_service(next(override_get_db()))
+    assert isinstance(service, TransactionService)
 
     main.app.dependency_overrides.clear()
