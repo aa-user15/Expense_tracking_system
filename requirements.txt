@@ -1,0 +1,6 @@
+# Libraries required for the project
+fastapi
+uvicorn
+sqlalchemy
+pydantic
+pytest
